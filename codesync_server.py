@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import fcntl
 import hashlib
 import hmac
 import json
@@ -243,23 +242,73 @@ def short_sha(value: str) -> str:
     return value[:12]
 
 
+@contextmanager
+def exclusive_file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 class GitRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self.askpass_path = config.state_dir / "git-askpass.sh"
+        self.askpass_script_path = config.state_dir / "git-askpass.py"
+        self.askpass_path = config.state_dir / ("git-askpass.cmd" if os.name == "nt" else "git-askpass.py")
 
     def ensure_askpass(self) -> None:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
-        content = """#!/bin/sh
-case "$1" in
-  *Username*|*username*) printf '%s\\n' "$CODESYNC_ASKPASS_USERNAME" ;;
-  *Password*|*password*) printf '%s\\n' "$CODESYNC_ASKPASS_PASSWORD" ;;
-  *) printf '\\n' ;;
-esac
+        script_content = """#!/usr/bin/env python3
+import os
+import sys
+
+prompt = sys.argv[1].lower() if len(sys.argv) > 1 else ""
+if "username" in prompt:
+    value = os.environ.get("CODESYNC_ASKPASS_USERNAME", "")
+elif "password" in prompt:
+    value = os.environ.get("CODESYNC_ASKPASS_PASSWORD", "")
+else:
+    value = ""
+sys.stdout.write(value + "\\n")
 """
-        current = self.askpass_path.read_text(encoding="utf-8") if self.askpass_path.exists() else None
-        if current != content:
-            self.askpass_path.write_text(content, encoding="utf-8")
+        current = self.askpass_script_path.read_text(encoding="utf-8") if self.askpass_script_path.exists() else None
+        if current != script_content:
+            self.askpass_script_path.write_text(script_content, encoding="utf-8")
+            self.askpass_script_path.chmod(0o700)
+
+        if os.name == "nt":
+            wrapper_content = f'@echo off\n"{sys.executable}" "{self.askpass_script_path}" "%~1"\n'
+            current_wrapper = self.askpass_path.read_text(encoding="utf-8") if self.askpass_path.exists() else None
+            if current_wrapper != wrapper_content:
+                self.askpass_path.write_text(wrapper_content, encoding="utf-8")
+        else:
             self.askpass_path.chmod(0o700)
 
     def _env_for(self, credential: CredentialConfig | None) -> dict[str, str]:
@@ -298,9 +347,11 @@ esac
         check: bool = True,
     ) -> GitResult:
         full_args = ["git"]
-        if credential and credential.helper:
-            full_args.extend(["-c", f"credential.helper={credential.helper}"])
+        if credential:
+            full_args.extend(["-c", "credential.helper="])
             full_args.extend(["-c", f"credential.useHttpPath={str(credential.use_http_path).lower()}"])
+            if credential.helper:
+                full_args.extend(["-c", f"credential.helper={credential.helper}"])
         full_args.extend(args)
 
         env = self._env_for(credential)
@@ -343,14 +394,8 @@ class SyncService:
 
     @contextmanager
     def _process_lock(self):
-        self.config.state_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = self.config.state_dir / "sync.lock"
-        with lock_path.open("w", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(self.config.state_dir / "sync.lock"):
+            yield
 
     def git(
         self,
