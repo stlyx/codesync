@@ -5,7 +5,7 @@
 每次收到 webhook 后，服务会：
 
 1. 初始化或复用一个本地 bare 仓库。
-2. 用配置里的专用 Git credential 拉取两个远程的 `master` 分支，默认不会读取或写入本机全局 Git credential helper。
+2. 用配置里的专用 Git credential 拉取两个远程的 `master` 分支，默认不会读取或写入本机全局 Git credential helper，也不会使用系统/全局 `url.*.insteadOf` URL 重写规则。
 3. 拉取两个远程的全部 tag。
 4. 检查本地分支和两个远程分支是否能收敛到同一个 fast-forward 目标。
 5. 没有分叉冲突时，把 `master` 和全部 tag 推送回两个远程。
@@ -58,6 +58,8 @@ $env:CODESYNC_GIT_USERNAME = 'git-user-or-token-name'
 $env:CODESYNC_GIT_PASSWORD = 'git-password-or-token'
 python codesync_server.py --config config.json
 ```
+
+服务运行 Git 子进程时会隔离 system/global/env Git config，防止 `url.*.insteadOf` 或 `url.*.pushInsteadOf` 生效。对于服务自己的 bare repo，本地 config 中的 `url.*.insteadOf`、`url.*.pushInsteadOf`、`include.*` 和 `includeIf.*` 会在同步前被移除。
 
 ## 运行
 

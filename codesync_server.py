@@ -23,6 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 LOG = logging.getLogger("codesync")
 REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+UNSAFE_LOCAL_CONFIG_RE = r"^(url\..*\.(insteadof|pushinsteadof)|include\..*|includeif\..*)$"
 
 
 class ConfigError(Exception):
@@ -282,6 +283,14 @@ class GitRunner:
         self.config = config
         self.askpass_script_path = config.state_dir / "git-askpass.py"
         self.askpass_path = config.state_dir / ("git-askpass.cmd" if os.name == "nt" else "git-askpass.py")
+        self.isolated_config_path = config.state_dir / "isolated-gitconfig"
+
+    def ensure_isolated_config(self) -> None:
+        self.config.state_dir.mkdir(parents=True, exist_ok=True)
+        content = "# CodeSync intentionally keeps this Git config empty.\n"
+        current = self.isolated_config_path.read_text(encoding="utf-8") if self.isolated_config_path.exists() else None
+        if current != content:
+            self.isolated_config_path.write_text(content, encoding="utf-8")
 
     def ensure_askpass(self) -> None:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -313,7 +322,17 @@ sys.stdout.write(value + "\\n")
 
     def _env_for(self, credential: CredentialConfig | None) -> dict[str, str]:
         env = os.environ.copy()
+        self.ensure_isolated_config()
         env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_CONFIG_SYSTEM"] = str(self.isolated_config_path)
+        env["GIT_CONFIG_GLOBAL"] = str(self.isolated_config_path)
+        env["GIT_CONFIG_COUNT"] = "0"
+        env.pop("GIT_CONFIG", None)
+        env.pop("GIT_CONFIG_PARAMETERS", None)
+        for key in list(env):
+            if key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+                env.pop(key, None)
 
         if not credential:
             return env
@@ -422,6 +441,32 @@ class SyncService:
             else:
                 self.git(["remote", "add", remote.name, remote.url])
 
+    def sanitize_local_config(self) -> None:
+        result = self.git(
+            [
+                "config",
+                "--local",
+                "--no-includes",
+                "--name-only",
+                "--get-regexp",
+                UNSAFE_LOCAL_CONFIG_RE,
+            ],
+            check=False,
+        )
+        if result.returncode == 1:
+            return
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise GitError(f"failed to inspect local git config: {detail}", returncode=result.returncode)
+
+        unsafe_keys = sorted(set(line.strip() for line in result.stdout.splitlines() if line.strip()))
+        for key in unsafe_keys:
+            LOG.warning("removing unsafe local git config: %s", key)
+            unset = self.git(["config", "--local", "--unset-all", key], check=False)
+            if unset.returncode != 0:
+                detail = (unset.stderr or unset.stdout or "").strip()
+                raise GitError(f"failed to remove unsafe local git config {key}: {detail}", returncode=unset.returncode)
+
     def fetch_remote(self, remote: RemoteConfig) -> str:
         branch = self.config.branch
         remote_ref = f"refs/remotes/{remote.name}/{branch}"
@@ -491,6 +536,7 @@ class SyncService:
         with self.memory_lock:
             with self._process_lock():
                 self.init_repo()
+                self.sanitize_local_config()
                 self.configure_remotes()
 
                 tips: list[tuple[str, str]] = []
