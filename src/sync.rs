@@ -71,13 +71,17 @@ pub fn sync_once(
         branch: config.branch.clone(),
         target,
         elapsed_ms: started_at.elapsed().as_millis(),
-        remotes: config.remotes.iter().map(|remote| remote.name.clone()).collect(),
+        remotes: config
+            .remotes
+            .iter()
+            .map(|remote| remote.name.clone())
+            .collect(),
     })
 }
 
 pub fn select_fast_forward_target(
     backend: &impl GitBackend,
-    labeled_tips: &[( &str, &str)],
+    labeled_tips: &[(&str, &str)],
 ) -> Result<String> {
     let mut seen = HashSet::new();
     let unique_tips: Vec<(&str, &str)> = labeled_tips
@@ -184,7 +188,10 @@ mod tests {
     impl GitBackend for FakeBackend {
         fn ensure_repo(&mut self, _config: &AppConfig) -> Result<()> {
             if let Some(path) = &self.expected_lock_path {
-                assert!(path.exists(), "sync lock should exist before ensure_repo runs");
+                assert!(
+                    path.exists(),
+                    "sync lock should exist before ensure_repo runs"
+                );
             }
             self.ensure_repo_calls += 1;
             self.operations.borrow_mut().push("ensure_repo".to_string());
@@ -193,13 +200,19 @@ mod tests {
 
         fn fetch_remote(&mut self, remote: &RemoteConfig, branch: &str) -> Result<String> {
             assert_eq!(branch, "main");
-            assert_eq!(self.ensure_repo_calls, 1, "ensure_repo must run before fetch");
+            assert_eq!(
+                self.ensure_repo_calls, 1,
+                "ensure_repo must run before fetch"
+            );
             self.operations
                 .borrow_mut()
                 .push(format!("fetch:{}", remote.name));
-            self.fetch_results.get(&remote.name).cloned().ok_or_else(|| {
-                CodeSyncError::GitBackend(format!("missing fetch result for {}", remote.name))
-            })
+            self.fetch_results
+                .get(&remote.name)
+                .cloned()
+                .ok_or_else(|| {
+                    CodeSyncError::GitBackend(format!("missing fetch result for {}", remote.name))
+                })
         }
 
         fn fetch_tags(&mut self, remote: &RemoteConfig) -> Result<()> {
@@ -218,7 +231,10 @@ mod tests {
             self.operations
                 .borrow_mut()
                 .push(format!("is_ancestor:{older}:{newer}"));
-            Ok(older == newer || self.ancestors.contains(&(older.to_string(), newer.to_string())))
+            Ok(older == newer
+                || self
+                    .ancestors
+                    .contains(&(older.to_string(), newer.to_string())))
         }
 
         fn update_local_branch(&mut self, branch: &str, target: &str) -> Result<()> {
@@ -230,12 +246,7 @@ mod tests {
             Ok(())
         }
 
-        fn push_remote(
-            &mut self,
-            remote: &RemoteConfig,
-            branch: &str,
-            target: &str,
-        ) -> Result<()> {
+        fn push_remote(&mut self, remote: &RemoteConfig, branch: &str, target: &str) -> Result<()> {
             assert_eq!(branch, "main");
             self.operations
                 .borrow_mut()
@@ -259,7 +270,11 @@ mod tests {
 
         let target = select_fast_forward_target(
             &backend,
-            &[("origin", "1111111"), ("backup", "2222222"), ("local", "3333333")],
+            &[
+                ("origin", "1111111"),
+                ("backup", "2222222"),
+                ("local", "3333333"),
+            ],
         )
         .expect("target should be selected");
 
@@ -313,7 +328,11 @@ mod tests {
 
         let target = select_fast_forward_target(
             &backend,
-            &[("origin", "abcdef0"), ("backup", "abcdef0"), ("local", "abcdef0")],
+            &[
+                ("origin", "abcdef0"),
+                ("backup", "abcdef0"),
+                ("local", "abcdef0"),
+            ],
         )
         .expect("equal tips should succeed");
 
@@ -335,7 +354,10 @@ mod tests {
         assert_eq!(result.status, "ok");
         assert_eq!(result.branch, "main");
         assert_eq!(result.target, "3333333");
-        assert_eq!(result.remotes, vec!["origin".to_string(), "backup".to_string()]);
+        assert_eq!(
+            result.remotes,
+            vec!["origin".to_string(), "backup".to_string()]
+        );
         assert!(!result.id.is_empty());
         assert_eq!(backend.ensure_repo_calls, 1);
         assert_eq!(
@@ -407,7 +429,10 @@ mod tests {
 
         sync_once(&config, &mut backend, "webhook").expect("sync should succeed");
 
-        assert_eq!(backend.operations().first(), Some(&"ensure_repo".to_string()));
+        assert_eq!(
+            backend.operations().first(),
+            Some(&"ensure_repo".to_string())
+        );
     }
 
     #[test]
@@ -422,7 +447,12 @@ mod tests {
             .expect("sync should succeed without local tip");
 
         assert_eq!(result.target, "3333333");
-        assert!(backend.operations().iter().all(|entry| entry != "fetch:local"));
+        assert!(
+            backend
+                .operations()
+                .iter()
+                .all(|entry| entry != "fetch:local")
+        );
     }
 
     fn sample_config() -> AppConfig {

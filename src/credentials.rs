@@ -157,8 +157,8 @@ mod tests {
 
     #[test]
     fn no_configured_credentials_returns_none() {
-        let resolved =
-            ResolvedCredentials::from_config(&credential_config(None, None)).expect("no env should be allowed");
+        let resolved = ResolvedCredentials::from_config(&credential_config(None, None))
+            .expect("no env should be allowed");
 
         assert_eq!(resolved, None);
     }

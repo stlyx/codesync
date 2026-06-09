@@ -150,7 +150,11 @@ mod tests {
         let signature = signature_for("shared-secret", signed_body);
         let headers = header_map(&[("X-Hub-Signature-256", signature.as_str())]);
 
-        assert!(!verify_webhook_secret(Some("shared-secret"), &headers, actual_body));
+        assert!(!verify_webhook_secret(
+            Some("shared-secret"),
+            &headers,
+            actual_body
+        ));
     }
 
     #[test]
@@ -181,10 +185,7 @@ mod tests {
 
     #[test]
     fn duplicate_case_headers_do_not_make_auth_nondeterministic() {
-        let mut headers = header_map(&[
-            ("Authorization", ""),
-            ("authorization", ""),
-        ]);
+        let mut headers = header_map(&[("Authorization", ""), ("authorization", "")]);
         place_wrong_value_on_first_matching_header(
             &mut headers,
             "Authorization",
@@ -201,10 +202,7 @@ mod tests {
 
     #[test]
     fn duplicate_case_token_headers_do_not_make_auth_nondeterministic() {
-        let mut headers = header_map(&[
-            ("X-CodeSync-Token", ""),
-            ("x-codesync-token", ""),
-        ]);
+        let mut headers = header_map(&[("X-CodeSync-Token", ""), ("x-codesync-token", "")]);
         place_wrong_value_on_first_matching_header(
             &mut headers,
             "X-CodeSync-Token",

@@ -18,14 +18,13 @@
     "username_env": "CODESYNC_GIT_USERNAME",
     "password_env": "CODESYNC_GIT_PASSWORD",
     "helper": "",
-    "ssh_command_env": "CODESYNC_GIT_SSH_COMMAND",
+    "ssh_command_env": "",
     "use_http_path": true
   },
   "remotes": [
     {
       "name": "repo_a",
-      "url": "https://example.com/group/project-a.git",
-      "role": "master"
+      "url": "https://example.com/group/project-a.git"
     },
     {
       "name": "repo_b",

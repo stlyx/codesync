@@ -195,9 +195,12 @@ mod tests {
         }
     }
 
-    fn write_commit(repo: &git2::Repository, message: &str, parent: Option<git2::Oid>) -> git2::Oid {
-        let signature =
-            git2::Signature::now("CodeSync Test", "codesync@example.invalid").unwrap();
+    fn write_commit(
+        repo: &git2::Repository,
+        message: &str,
+        parent: Option<git2::Oid>,
+    ) -> git2::Oid {
+        let signature = git2::Signature::now("CodeSync Test", "codesync@example.invalid").unwrap();
         let tree_id = {
             let builder = repo.treebuilder(None).unwrap();
             builder.write().unwrap()
@@ -214,7 +217,10 @@ mod tests {
     #[test]
     fn branch_ref_names_match_existing_service() {
         assert_eq!(branch_ref("main"), "refs/heads/main");
-        assert_eq!(remote_branch_ref("repo_a", "main"), "refs/remotes/repo_a/main");
+        assert_eq!(
+            remote_branch_ref("repo_a", "main"),
+            "refs/remotes/repo_a/main"
+        );
     }
 
     #[test]
@@ -224,7 +230,10 @@ mod tests {
             "+refs/heads/main:refs/remotes/repo_a/main"
         );
         assert_eq!(tag_fetch_refspec(), "refs/tags/*:refs/tags/*");
-        assert_eq!(branch_push_refspec("main"), "refs/heads/main:refs/heads/main");
+        assert_eq!(
+            branch_push_refspec("main"),
+            "refs/heads/main:refs/heads/main"
+        );
         assert_eq!(tag_push_refspec(), "refs/tags/*:refs/tags/*");
     }
 
@@ -256,7 +265,9 @@ mod tests {
         let commit = write_commit(backend.repo().unwrap(), "initial", None);
 
         assert_eq!(backend.local_branch_tip("main").unwrap(), None);
-        backend.update_local_branch("main", &commit.to_string()).unwrap();
+        backend
+            .update_local_branch("main", &commit.to_string())
+            .unwrap();
 
         assert_eq!(
             backend.local_branch_tip("main").unwrap(),
@@ -274,11 +285,15 @@ mod tests {
         let first = write_commit(backend.repo().unwrap(), "first", None);
         let second = write_commit(backend.repo().unwrap(), "second", Some(first));
 
-        assert!(backend
-            .is_ancestor(&first.to_string(), &second.to_string())
-            .unwrap());
-        assert!(!backend
-            .is_ancestor(&second.to_string(), &first.to_string())
-            .unwrap());
+        assert!(
+            backend
+                .is_ancestor(&first.to_string(), &second.to_string())
+                .unwrap()
+        );
+        assert!(
+            !backend
+                .is_ancestor(&second.to_string(), &first.to_string())
+                .unwrap()
+        );
     }
 }

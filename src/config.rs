@@ -761,8 +761,7 @@ mod tests {
 }
 "#;
 
-        let err =
-            AppConfig::from_json_str(text).expect_err("single remote should be rejected");
+        let err = AppConfig::from_json_str(text).expect_err("single remote should be rejected");
 
         assert!(
             matches!(err, CodeSyncError::Config(message) if message.contains("at least two remote objects"))

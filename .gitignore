@@ -1,8 +1,5 @@
-__pycache__/
-*.py[cod]
 config.json
 data/
 state/
-.pytest_cache/
 target/
 .claude/
