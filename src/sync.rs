@@ -441,6 +441,7 @@ mod tests {
                         password_env: Some("ORIGIN_PASS".to_string()),
                         use_http_path: false,
                     },
+                    role: None,
                 },
                 RemoteConfig {
                     name: "backup".to_string(),
@@ -450,6 +451,7 @@ mod tests {
                         password_env: Some("BACKUP_PASS".to_string()),
                         use_http_path: false,
                     },
+                    role: None,
                 },
             ],
             webhook: WebhookConfig {

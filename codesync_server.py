@@ -54,6 +54,7 @@ class RemoteConfig:
     name: str
     url: str
     credential: CredentialConfig
+    role: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,7 +71,7 @@ class AppConfig:
     repo_dir: Path
     state_dir: Path
     branch: str
-    remotes: tuple[RemoteConfig, RemoteConfig]
+    remotes: tuple[RemoteConfig, ...]
     webhook: WebhookConfig
     git_timeout_seconds: int
 
@@ -152,6 +153,17 @@ def _validate_branch_name(branch: str) -> None:
         raise ConfigError(f"branch {branch!r} is invalid")
 
 
+def _validate_remote_role(role: str | None, index: int) -> str | None:
+    if role is None or role == "":
+        return None
+    if not isinstance(role, str):
+        raise ConfigError(f"remotes[{index}].role must be a string")
+    role = role.strip()
+    if role in {"", "master"}:
+        return role or None
+    raise ConfigError(f"remotes[{index}].role {role!r} is invalid; supported role is 'master'")
+
+
 def load_config(path: Path) -> AppConfig:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -180,8 +192,8 @@ def load_config(path: Path) -> AppConfig:
     _validate_branch_name(branch)
 
     remotes_raw = raw.get("remotes")
-    if not isinstance(remotes_raw, list) or len(remotes_raw) != 2:
-        raise ConfigError("remotes must contain exactly two remote objects")
+    if not isinstance(remotes_raw, list) or len(remotes_raw) < 2:
+        raise ConfigError("remotes must contain at least two remote objects")
 
     remotes: list[RemoteConfig] = []
     seen_names: set[str] = set()
@@ -195,11 +207,13 @@ def load_config(path: Path) -> AppConfig:
         if name in seen_names:
             raise ConfigError(f"duplicate remote name: {name}")
         seen_names.add(name)
+        role = _validate_remote_role(remote_obj.get("role"), index)
         remotes.append(
             RemoteConfig(
                 name=name,
                 url=url,
                 credential=_merge_credential(credential_obj, remote_obj),
+                role=role,
             )
         )
 
@@ -222,7 +236,7 @@ def load_config(path: Path) -> AppConfig:
         repo_dir=repo_dir,
         state_dir=state_dir,
         branch=branch,
-        remotes=(remotes[0], remotes[1]),
+        remotes=tuple(remotes),
         webhook=webhook,
         git_timeout_seconds=git_timeout_seconds,
     )
@@ -467,7 +481,7 @@ class SyncService:
                 detail = (unset.stderr or unset.stdout or "").strip()
                 raise GitError(f"failed to remove unsafe local git config {key}: {detail}", returncode=unset.returncode)
 
-    def fetch_remote(self, remote: RemoteConfig) -> str:
+    def fetch_remote(self, remote: RemoteConfig, *, force_tags: bool = False) -> str:
         branch = self.config.branch
         remote_ref = f"refs/remotes/{remote.name}/{branch}"
         branch_refspec = f"+refs/heads/{branch}:{remote_ref}"
@@ -477,10 +491,13 @@ class SyncService:
             credential=remote.credential,
         )
         LOG.info("fetching tags from %s", remote.name)
-        self.git(
-            ["fetch", remote.name, "refs/tags/*:refs/tags/*"],
-            credential=remote.credential,
-        )
+        tag_refspec = "refs/tags/*:refs/tags/*"
+        fetch_tag_args = ["fetch"]
+        if force_tags:
+            tag_refspec = f"+{tag_refspec}"
+            fetch_tag_args.append("--prune")
+        fetch_tag_args.extend([remote.name, tag_refspec])
+        self.git(fetch_tag_args, credential=remote.credential)
         return self.rev_parse_commit(remote_ref)
 
     def ref_exists(self, ref: str) -> bool:
@@ -518,15 +535,29 @@ class SyncService:
         LOG.info("updating local %s to %s", self.config.branch, short_sha(target))
         self.git(["update-ref", branch_ref, target])
 
-    def push_remote(self, remote: RemoteConfig, target: str) -> None:
+    def push_remote(self, remote: RemoteConfig, target: str, *, force: bool = False) -> None:
         branch = self.config.branch
-        LOG.info("pushing %s to %s/%s", short_sha(target), remote.name, branch)
-        self.git(
-            ["push", remote.name, f"refs/heads/{branch}:refs/heads/{branch}"],
-            credential=remote.credential,
-        )
-        LOG.info("pushing tags to %s", remote.name)
-        self.git(["push", remote.name, "--tags"], credential=remote.credential)
+        action = "force-pushing" if force else "pushing"
+        LOG.info("%s %s to %s/%s", action, short_sha(target), remote.name, branch)
+        push_args = ["push"]
+        if force:
+            push_args.append("--force")
+        push_args.extend([remote.name, f"refs/heads/{branch}:refs/heads/{branch}"])
+        self.git(push_args, credential=remote.credential)
+
+        LOG.info("%s tags to %s", "force-pushing" if force else "pushing", remote.name)
+        tag_args = ["push"]
+        if force:
+            tag_args.extend(["--force", "--prune", remote.name, "refs/tags/*:refs/tags/*"])
+        else:
+            tag_args.extend([remote.name, "--tags"])
+        self.git(tag_args, credential=remote.credential)
+
+    def master_remote(self) -> RemoteConfig:
+        masters = [remote for remote in self.config.remotes if remote.role == "master"]
+        if len(masters) != 1:
+            raise ConfigError("--once --force requires exactly one remote with role='master'")
+        return masters[0]
 
     def sync(self, reason: str = "webhook") -> dict[str, Any]:
         sync_id = uuid.uuid4().hex[:12]
@@ -563,6 +594,44 @@ class SyncService:
             "target": target,
             "elapsed_ms": elapsed_ms,
             "remotes": [remote.name for remote in self.config.remotes],
+        }
+
+    def force_from_master(self, reason: str = "manual-force") -> dict[str, Any]:
+        sync_id = uuid.uuid4().hex[:12]
+        started = time.time()
+        source = self.master_remote()
+        targets = [remote for remote in self.config.remotes if remote.name != source.name]
+        LOG.info("force sync %s started (%s) from %s", sync_id, reason, source.name)
+
+        with self.memory_lock:
+            with self._process_lock():
+                self.init_repo()
+                self.sanitize_local_config()
+                self.configure_remotes()
+
+                target = self.fetch_remote(source, force_tags=True)
+                self.update_local_branch(target)
+
+                for remote in targets:
+                    self.push_remote(remote, target, force=True)
+
+        elapsed_ms = round((time.time() - started) * 1000)
+        LOG.info(
+            "force sync %s finished in %sms from %s at %s",
+            sync_id,
+            elapsed_ms,
+            source.name,
+            short_sha(target),
+        )
+        return {
+            "id": sync_id,
+            "status": "ok",
+            "mode": "force",
+            "branch": self.config.branch,
+            "source": source.name,
+            "target": target,
+            "elapsed_ms": elapsed_ms,
+            "remotes": [remote.name for remote in targets],
         }
 
 
@@ -647,15 +716,23 @@ def configure_logging(level: str) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Webhook server that fast-forward syncs two Git repositories.")
+    parser = argparse.ArgumentParser(description="Webhook server that fast-forward syncs Git repositories.")
     parser.add_argument(
         "--config",
         default=os.environ.get("CODESYNC_CONFIG", "config.json"),
         help="path to JSON config file (default: CODESYNC_CONFIG or config.json)",
     )
     parser.add_argument("--once", action="store_true", help="run one sync and exit")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --once, force-push from the remote whose role is master to all other remotes",
+    )
     parser.add_argument("--log-level", default=os.environ.get("CODESYNC_LOG_LEVEL", "INFO"))
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.force and not args.once:
+        parser.error("--force can only be used with --once")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -666,7 +743,10 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(Path(args.config))
         service = SyncService(config)
         if args.once:
-            result = service.sync(reason="manual")
+            if args.force:
+                result = service.force_from_master(reason="manual-force")
+            else:
+                result = service.sync(reason="manual")
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
 

@@ -24,7 +24,8 @@
   "remotes": [
     {
       "name": "repo_a",
-      "url": "https://example.com/group/project-a.git"
+      "url": "https://example.com/group/project-a.git",
+      "role": "master"
     },
     {
       "name": "repo_b",

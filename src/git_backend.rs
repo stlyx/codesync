@@ -176,11 +176,13 @@ mod tests {
                     name: "repo_a".to_string(),
                     url: "https://example.invalid/a.git".to_string(),
                     credential: credential.clone(),
+                    role: None,
                 },
                 RemoteConfig {
                     name: "repo_b".to_string(),
                     url: "https://example.invalid/b.git".to_string(),
                     credential,
+                    role: None,
                 },
             ],
             webhook: WebhookConfig {

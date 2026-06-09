@@ -26,6 +26,7 @@ pub struct RemoteConfig {
     pub name: String,
     pub url: String,
     pub credential: CredentialConfig,
+    pub role: Option<String>,
 }
 
 impl fmt::Debug for RemoteConfig {
@@ -33,6 +34,7 @@ impl fmt::Debug for RemoteConfig {
         f.debug_struct("RemoteConfig")
             .field("name", &self.name)
             .field("url", &redact_url_userinfo(&self.url))
+            .field("role", &self.role)
             .field("credential", &"<redacted>")
             .finish()
     }
@@ -164,6 +166,7 @@ struct RawCredentialConfig {
 struct RawRemoteConfig {
     name: Option<String>,
     url: Option<String>,
+    role: Option<String>,
     credential: Option<RawCredentialConfig>,
     #[serde(default)]
     username_env: RawCredentialString,
@@ -259,11 +262,11 @@ impl AppConfig {
             .unwrap_or(DEFAULT_GIT_TIMEOUT_SECONDS);
 
         let raw_remotes = raw.remotes.ok_or_else(|| {
-            CodeSyncError::Config("remotes must contain exactly two remote objects".to_string())
+            CodeSyncError::Config("remotes must contain at least two remote objects".to_string())
         })?;
-        if raw_remotes.len() != 2 {
+        if raw_remotes.len() < 2 {
             return Err(CodeSyncError::Config(
-                "remotes must contain exactly two remote objects".to_string(),
+                "remotes must contain at least two remote objects".to_string(),
             ));
         }
 
@@ -290,6 +293,7 @@ impl AppConfig {
                     "only https remote URLs are supported".to_string(),
                 ));
             }
+            let role = validate_remote_role(remote.role.as_deref(), index)?;
 
             let credential =
                 merge_credential(&global_credential, remote.credential.as_ref(), &remote)?;
@@ -297,6 +301,7 @@ impl AppConfig {
                 name,
                 url,
                 credential,
+                role,
             });
         }
 
@@ -381,6 +386,22 @@ fn validate_remote_name(name: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn validate_remote_role(role: Option<&str>, index: usize) -> Result<Option<String>> {
+    let Some(role) = role else {
+        return Ok(None);
+    };
+    let role = role.trim();
+    if role.is_empty() {
+        return Ok(None);
+    }
+    if role == "master" {
+        return Ok(Some(role.to_string()));
+    }
+    Err(CodeSyncError::Config(format!(
+        "remotes[{index}].role {role:?} is invalid; supported role is 'master'"
+    )))
 }
 
 fn validate_webhook_path(path: &str) -> Result<()> {
@@ -687,6 +708,65 @@ mod tests {
         assert_eq!(config.git_timeout_seconds, 45);
         assert_eq!(config.branch, "master");
         assert_eq!(config.state_dir, PathBuf::from("/srv/codesync"));
+    }
+
+    #[test]
+    fn parses_master_role_and_more_than_two_remotes() {
+        let text = r#"
+{
+  "repo_dir": "/var/lib/codesync/repo.git",
+  "remotes": [
+    { "name": "repo_a", "url": "https://example.com/a.git", "role": "master" },
+    { "name": "repo_b", "url": "https://example.com/b.git" },
+    { "name": "repo_c", "url": "https://example.com/c.git" }
+  ]
+}
+"#;
+
+        let config = parse(text);
+
+        assert_eq!(config.remotes.len(), 3);
+        assert_eq!(config.remotes[0].role.as_deref(), Some("master"));
+        assert_eq!(config.remotes[1].role, None);
+        assert_eq!(config.remotes[2].name, "repo_c");
+    }
+
+    #[test]
+    fn rejects_invalid_remote_role() {
+        let text = r#"
+{
+  "repo_dir": "/var/lib/codesync/repo.git",
+  "remotes": [
+    { "name": "repo_a", "url": "https://example.com/a.git", "role": "source" },
+    { "name": "repo_b", "url": "https://example.com/b.git" }
+  ]
+}
+"#;
+
+        let err = AppConfig::from_json_str(text).expect_err("invalid role should be rejected");
+
+        assert!(
+            matches!(err, CodeSyncError::Config(message) if message.contains("supported role is 'master'"))
+        );
+    }
+
+    #[test]
+    fn rejects_fewer_than_two_remotes() {
+        let text = r#"
+{
+  "repo_dir": "/var/lib/codesync/repo.git",
+  "remotes": [
+    { "name": "repo_a", "url": "https://example.com/a.git" }
+  ]
+}
+"#;
+
+        let err =
+            AppConfig::from_json_str(text).expect_err("single remote should be rejected");
+
+        assert!(
+            matches!(err, CodeSyncError::Config(message) if message.contains("at least two remote objects"))
+        );
     }
 
     #[test]
@@ -1316,6 +1396,7 @@ mod tests {
                 password_env: None,
                 use_http_path: true,
             },
+            role: Some("master".to_string()),
         };
 
         let debug = format!("{remote:?}");
