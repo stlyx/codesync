@@ -509,7 +509,7 @@ fn merge_credential(
 mod tests {
     use super::*;
     use crate::error::CodeSyncError;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     fn base_json() -> &'static str {
         r#"
@@ -590,6 +590,41 @@ mod tests {
             Some("CODESYNC_GIT_PASSWORD")
         );
         assert!(config.remotes[0].credential.use_http_path);
+    }
+
+    #[test]
+    fn config_example_parses_with_empty_ssh_command_env() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.example.json");
+        let text = fs::read_to_string(&path).expect("example config should be readable");
+
+        let config = parse(&text);
+
+        assert_eq!(config.remotes.len(), 2);
+    }
+
+    #[test]
+    fn missing_ssh_command_env_is_allowed() {
+        let text = replace(base_json(), "    \"ssh_command_env\": \"\",\n", "");
+
+        let config = parse(&text);
+
+        assert_eq!(config.remotes.len(), 2);
+    }
+
+    #[test]
+    fn remote_top_level_non_empty_ssh_command_env_is_unsupported() {
+        let text = replace(
+            base_json(),
+            "\"url\": \"https://example.com/group/project-a.git\"",
+            "\"url\": \"https://example.com/group/project-a.git\",\n      \"ssh_command_env\": \"REMOTE_SSH_COMMAND\"",
+        );
+
+        let err = AppConfig::from_json_str(&text)
+            .expect_err("remote ssh command should be unsupported");
+
+        assert!(
+            matches!(err, CodeSyncError::Unsupported(message) if message.contains("ssh_command_env is not supported"))
+        );
     }
 
     #[test]
