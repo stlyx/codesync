@@ -4,3 +4,5 @@ config.json
 data/
 state/
 .pytest_cache/
+target/
+.claude/
